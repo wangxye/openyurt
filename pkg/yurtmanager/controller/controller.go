@@ -36,6 +36,7 @@ import (
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/nodelifecycle"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/nodepool"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/platformadmin"
+	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/poolservice"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/raven/dns"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/raven/gatewayinternalservice"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/raven/gatewaypickup"
@@ -97,6 +98,7 @@ func NewControllerInitializers() map[string]InitFunc {
 	register(names.GatewayPublicServiceController, gatewaypublicservice.Add)
 	register(names.NodeLifeCycleController, nodelifecycle.Add)
 	register(names.NodeBucketController, nodebucket.Add)
+	register(names.PoolServiceController, poolservice.Add)
 
 	return controllers
 }
