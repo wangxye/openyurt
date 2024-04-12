@@ -24,23 +24,24 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/openyurtio/openyurt/cmd/yurt-lb-agent/app/options"
-	netv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/net/v1alpha1"
-	"github.com/openyurtio/openyurt/pkg/yurtlbagent/util"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/openyurtio/openyurt/cmd/yurt-lb-agent/app/options"
+	network "github.com/openyurtio/openyurt/pkg/apis/network"
+	netv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
+	"github.com/openyurtio/openyurt/pkg/yurtlbagent/util"
 )
 
 const (
-	VRIDLabelKey      = "net.openyurt.io/vrid"
+	VRIDLabelKey      = "service.openyurt.io/vrid"
 	BACKUPState       = "BACKUP"
-	LOADBALANCERCLASS = "net.openyurt.io/yurtlb"
+	LOADBALANCERCLASS = "service.openyurt.io/yurtlb"
 )
 
 var controllerResource = netv1alpha1.SchemeGroupVersion.WithResource("poolservices")
@@ -112,10 +113,6 @@ func (r *PoolServiceReconciler) reconcileNormal(ctx context.Context, poolservice
 	klog.Infof(Format("reconcileNormal poolservice %s/%s", poolservice.Namespace, poolservice.Name))
 	podExistsOnNode, err := r.filterByPod(ctx, poolservice)
 	if err != nil || !podExistsOnNode {
-		return r.deleteBalancer(poolservice)
-	}
-
-	if poolservice.Status.LoadBalancer == nil {
 		return r.deleteBalancer(poolservice)
 	}
 
@@ -205,7 +202,6 @@ func (r *PoolServiceReconciler) SetupWithManager(mgr ctrl.Manager, opts *options
 		klog.Errorf(Format("start keepalived err, %v", err))
 	}()
 
-	// TODO: watch poolendpoints
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1alpha1.PoolService{}).
 		Complete(r)
@@ -237,7 +233,7 @@ func filterByLoadBalancerClass(poolservice *netv1alpha1.PoolService, loadBalance
 	if poolservice == nil {
 		return false
 	}
-	if poolservice.Spec.LoadBalancerClass != loadBalancerClass {
+	if *poolservice.Spec.LoadBalancerClass != loadBalancerClass {
 		return true
 	}
 	return false
@@ -247,17 +243,18 @@ func filterByNodepool(poolservice *netv1alpha1.PoolService, nodepool string) boo
 	if poolservice == nil {
 		return false
 	}
-	if poolservice.Spec.PoolName != nodepool {
+
+	if poolservice.Labels[network.LabelNodePoolName] != nodepool {
 		return true
 	}
 	return false
 }
 
 func (r *PoolServiceReconciler) filterByPod(ctx context.Context, poolservice *netv1alpha1.PoolService) (bool, error) {
-	// TODO: get service by poolservice
+	// get service by poolservice
 	service := &v1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: poolservice.Namespace, Name: poolservice.Name}, service); err != nil {
-		klog.Errorf(Format("get Service %s/%s error %v", poolservice.Namespace, poolservice.Name, err))
+	if err := r.Get(ctx, types.NamespacedName{Namespace: poolservice.Namespace, Name: poolservice.Labels[network.LabelServiceName]}, service); err != nil {
+		klog.Errorf(Format("get Service %s/%s error %v", poolservice.Namespace, poolservice.Labels[network.LabelServiceName], err))
 		return false, err
 	}
 	klog.Infof(Format("get Service %s/%s", poolservice.Namespace, poolservice.Name))

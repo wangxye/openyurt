@@ -24,6 +24,7 @@ import (
 	csrapproverconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/csrapprover/config"
 	daemonpodupdaterconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/daemonpodupdater/config"
 	loadbalancersetconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/loadbalancerset/loadbalancerset/config"
+	viploadbalacerconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/loadbalancerset/viploadbalancer/config"
 	nodebucketconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/nodebucket/config"
 	nodepoolconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/nodepool/config"
 	platformadminconfig "github.com/openyurtio/openyurt/pkg/yurtmanager/controller/platformadmin/config"
@@ -81,6 +82,9 @@ type YurtManagerConfiguration struct {
 
 	//  LoadBalancerSetController holds configuration for LoadBalancerSetController related features.
 	LoadBalancerSetController loadbalancersetconfig.LoadBalancerSetControllerConfiguration
+
+	// VipLoadBalancerController holds configuration for VipLoadBalancerController related features.
+	VipLoadBalancerController viploadbalacerconfig.VipLoadBalancerControllerConfiguration
 }
 
 type GenericConfiguration struct {
