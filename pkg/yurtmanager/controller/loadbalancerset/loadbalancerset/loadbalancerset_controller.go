@@ -272,6 +272,7 @@ func (r *ReconcileLoadBalancerSet) reconcilePoolServices(svc *corev1.Service) er
 }
 
 func (r *ReconcileLoadBalancerSet) syncPoolServices(svc *corev1.Service) error {
+	klog.Infof(Format("Sync PoolService %s/%s", svc.Namespace, svc.Name))
 	currentPoolServices, err := r.currentPoolServices(svc)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get current pool services for service %s/%s", svc.Namespace, svc.Name)

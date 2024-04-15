@@ -18,19 +18,16 @@ package viploadbalancer
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"strconv"
 
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -40,22 +37,21 @@ import (
 
 	appconfig "github.com/openyurtio/openyurt/cmd/yurt-manager/app/config"
 	"github.com/openyurtio/openyurt/cmd/yurt-manager/names"
-	appsv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/apps/v1alpha1"
 	network "github.com/openyurtio/openyurt/pkg/apis/network"
 	netv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
-	"github.com/openyurtio/openyurt/pkg/projectinfo"
 	"github.com/openyurtio/openyurt/pkg/yurtmanager/controller/loadbalancerset/viploadbalancer/config"
 )
 
-func init() {
-	flag.IntVar(&concurrentReconciles, "edgeloadbalace-workers", concurrentReconciles, "Max concurrent workers for edgeloadbalace controller.")
-}
-
 var (
-	concurrentReconciles     = 3
-	controllerKind           = netv1alpha1.SchemeGroupVersion.WithKind("VipLoadBalancer")
-	VipLoadBalancerVRIDLabel = "service.openyurt.io/vrid"
-	VipLoadBalancerClass     = "service.openyurt.io/viplb"
+	poolServicesControllerResource = netv1alpha1.SchemeGroupVersion.WithResource("poolservices")
+)
+
+const (
+	AnnotationVipLoadBalancerVRID = "service.openyurt.io/vrid"
+	VipLoadBalancerClass          = "service.openyurt.io/viplb"
+
+	AnnotationServiceTopologyKey           = "openyurt.io/topologyKeys"
+	AnnotationServiceTopologyValueNodePool = "openyurt.io/nodepool"
 )
 
 func Format(format string, args ...interface{}) string {
@@ -66,8 +62,14 @@ func Format(format string, args ...interface{}) string {
 // Add creates a new EdgeLoadBalace Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 func Add(ctx context.Context, c *appconfig.CompletedConfig, mgr manager.Manager) error {
-	klog.Infof(Format("viploadbalacer-controller add controller %s", controllerKind.String()))
-	return add(mgr, newReconciler(c, mgr))
+	klog.Infof(Format("viploadbalacer-controller add controller %s", poolServicesControllerResource.String()))
+	r := newReconciler(c, mgr)
+
+	if _, err := r.mapper.KindFor(poolServicesControllerResource); err != nil {
+		return fmt.Errorf("resource %s isn't exist", poolServicesControllerResource.String())
+	}
+
+	return add(mgr, c, r)
 }
 
 var _ reconcile.Reconciler = &ReconcileVipLoadBalancer{}
@@ -75,17 +77,20 @@ var _ reconcile.Reconciler = &ReconcileVipLoadBalancer{}
 // ReconcileVipLoadBalancer reconciles service, endpointslice and PoolService object
 type ReconcileVipLoadBalancer struct {
 	client.Client
-	scheme       *runtime.Scheme
-	recorder     record.EventRecorder
+	scheme   *runtime.Scheme
+	recorder record.EventRecorder
+	mapper   meta.RESTMapper
+
 	Configration config.VipLoadBalancerControllerConfiguration
 	VRIDManager  *VRIDManager
 }
 
 // newReconciler returns a new reconcile.Reconciler
-func newReconciler(c *appconfig.CompletedConfig, mgr manager.Manager) reconcile.Reconciler {
+func newReconciler(c *appconfig.CompletedConfig, mgr manager.Manager) *ReconcileVipLoadBalancer {
 	return &ReconcileVipLoadBalancer{
 		Client:       mgr.GetClient(),
 		scheme:       mgr.GetScheme(),
+		mapper:       mgr.GetRESTMapper(),
 		recorder:     mgr.GetEventRecorderFor(names.VipLoadBalancerController),
 		Configration: c.ComponentConfig.VipLoadBalancerController,
 		VRIDManager:  NewVRIDManager(),
@@ -93,10 +98,10 @@ func newReconciler(c *appconfig.CompletedConfig, mgr manager.Manager) reconcile.
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler) error {
+func add(mgr manager.Manager, cfg *appconfig.CompletedConfig, r reconcile.Reconciler) error {
 	// Create a new controller
 	c, err := controller.New(names.VipLoadBalancerController, mgr, controller.Options{
-		Reconciler: r, MaxConcurrentReconciles: concurrentReconciles,
+		Reconciler: r, MaxConcurrentReconciles: int(cfg.ComponentConfig.VipLoadBalancerController.ConcurrentLoadBalancerSetWorkers),
 	})
 	if err != nil {
 		return err
@@ -111,9 +116,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	return nil
 }
 
-// +kubebuilder:rbac:groups=net.openyurt.io,resources=poolservices,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=network.openyurt.io,resources=poolservices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile reads that state of the cluster for a PoolService object and makes changes based on the state read
 func (r *ReconcileVipLoadBalancer) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
@@ -124,7 +127,7 @@ func (r *ReconcileVipLoadBalancer) Reconcile(ctx context.Context, request reconc
 	err := r.Get(context.TODO(), request.NamespacedName, poolService)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return reconcile.Result{}, err
+			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, err
 	}
@@ -144,15 +147,10 @@ func (r *ReconcileVipLoadBalancer) Reconcile(ctx context.Context, request reconc
 
 func (r *ReconcileVipLoadBalancer) syncPoolServices(ctx context.Context, poolService *netv1alpha1.PoolService) error {
 	// Create a new PoolService if not exist
-	klog.V(4).Infof(Format("ReconcilCreate VipLoadBalancer %s/%s", poolService.Namespace, poolService.Name))
-
-	// if not exist, create a new loadbalancer agent
-	if err := r.reconcileAgent(ctx, *poolService); err != nil {
-		return err
-	}
+	klog.V(4).Infof(Format("SyncPoolServices VipLoadBalancer %s/%s", poolService.Namespace, poolService.Name))
 
 	// if not exist, create a new VRID
-	if err := r.handleVRID(ctx, poolService); err != nil {
+	if err := r.handleVRID(poolService); err != nil {
 		return err
 	}
 
@@ -162,85 +160,79 @@ func (r *ReconcileVipLoadBalancer) syncPoolServices(ctx context.Context, poolSer
 		return err
 	}
 
+	// sync VRID from the poolservice
+	if err := r.syncVRID(ctx, poolService); err != nil {
+		klog.Errorf(Format("Failed to sync VRID on Pool Service %s/%s: %v", poolService.Namespace, poolService.Name, err))
+		return err
+	}
+
 	return nil
 }
 
-func (r *ReconcileVipLoadBalancer) reconcileAgent(ctx context.Context, poolService netv1alpha1.PoolService) error {
-	// check loadbalancer agent whether in the nodepool
-	poolName := poolService.Labels[network.LabelNodePoolName]
-	yas := &appsv1alpha1.YurtAppSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      vipAgentName(poolName),
-			Namespace: poolService.Namespace,
-		},
-	}
-
-	err := r.Get(
-		ctx,
-		types.NamespacedName{
-			Namespace: poolService.Namespace,
-			Name:      vipAgentName(poolName)},
-		yas)
+func (r *ReconcileVipLoadBalancer) syncVRID(ctx context.Context, poolService *netv1alpha1.PoolService) error {
+	currentPoolServices, err := r.getCurrentPoolServices(ctx, poolService)
 	if err != nil {
-		if !errors.IsNotFound(err) {
-			return err
-		}
-		// create a new loadbalancer agent in specific nodepool
-		vipagent, err := newVipAgent(poolService)
-		if err != nil {
-			klog.Errorf(Format("newVip Agent error %v", err))
-		}
-		_, err = r.handleYurtAppSet(ctx, poolService, vipagent)
-		if err != nil {
-			return err
-		}
+		return fmt.Errorf("failed to get current PoolServices: %v", err)
 	}
 
+	currentVRIDs := r.getCurrentVRID(currentPoolServices)
+	r.VRIDManager.SyncVRID(poolService.Labels[network.LabelNodePoolName], currentVRIDs)
 	return nil
 }
 
-func (r *ReconcileVipLoadBalancer) handleYurtAppSet(ctx context.Context, poolService netv1alpha1.PoolService, vipAgent *appsv1.DeploymentSpec) (*appsv1alpha1.YurtAppSet, error) {
-	if vipAgent == nil {
-		return nil, nil
-	}
-	poolName := poolService.Labels[network.LabelNodePoolName]
-	yas := &appsv1alpha1.YurtAppSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      vipAgentName(poolName),
-			Namespace: poolService.Namespace,
-		},
-		Spec: appsv1alpha1.YurtAppSetSpec{
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": vipAgentName(poolName)},
-			},
-			WorkloadTemplate: appsv1alpha1.WorkloadTemplate{
-				DeploymentTemplate: &appsv1alpha1.DeploymentTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: map[string]string{"app": vipAgentName(poolName)},
-					},
-					Spec: *vipAgent,
-				},
-			},
-		},
+func (r *ReconcileVipLoadBalancer) getCurrentVRID(poolServices []netv1alpha1.PoolService) []int {
+	vrids := []int{}
+	for _, poolService := range poolServices {
+		vrid, err := strconv.Atoi(poolService.Annotations[AnnotationVipLoadBalancerVRID])
+		if err != nil {
+			klog.Errorf(Format("Failed to convert VRID to int: %v", err))
+			continue
+		}
+
+		if vrid < MINVRIDLIMIT || vrid > MAXVRIDLIMIT {
+			klog.Errorf(Format("Invalid VRID %d", vrid))
+			continue
+		}
+
+		vrids = append(vrids, vrid)
 	}
 
-	pool := appsv1alpha1.Pool{
-		Name:     poolName,
-		Replicas: pointer.Int32Ptr(1),
-	}
-	pool.NodeSelectorTerm.MatchExpressions = append(pool.NodeSelectorTerm.MatchExpressions,
-		corev1.NodeSelectorRequirement{
-			Key:      projectinfo.GetNodePoolLabel(),
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   []string{poolName},
-		})
-	yas.Spec.Topology.Pools = append(yas.Spec.Topology.Pools, pool)
+	return vrids
+}
 
-	if err := r.Create(ctx, yas); err != nil {
+func (r *ReconcileVipLoadBalancer) getCurrentPoolServices(ctx context.Context, poolService *netv1alpha1.PoolService) ([]netv1alpha1.PoolService, error) {
+	// Get the poolservice list
+	listSelector := &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(map[string]string{
+			network.LabelNodePoolName: poolService.Labels[network.LabelNodePoolName],
+		}),
+		FieldSelector: fields.SelectorFromSet(map[string]string{
+			"spec.loadBalancerClass": VipLoadBalancerClass,
+		}),
+	}
+	poolServiceList := &netv1alpha1.PoolServiceList{}
+	if err := r.List(ctx, poolServiceList, listSelector); err != nil {
 		return nil, err
 	}
 
-	return yas, nil
+	return filterInvalidPoolService(poolServiceList.Items), nil
+}
+
+func filterInvalidPoolService(poolServices []netv1alpha1.PoolService) []netv1alpha1.PoolService {
+	filteredPoolServices := []netv1alpha1.PoolService{}
+	for _, poolService := range poolServices {
+		if poolService.Labels == nil {
+			continue
+		}
+
+		if _, ok := poolService.Annotations[AnnotationVipLoadBalancerVRID]; !ok {
+			continue
+		}
+
+		filteredPoolServices = append(filteredPoolServices, poolService)
+	}
+
+	return filteredPoolServices
 }
 
 func (r *ReconcileVipLoadBalancer) hasValidVRID(poolService netv1alpha1.PoolService) bool {
@@ -248,20 +240,27 @@ func (r *ReconcileVipLoadBalancer) hasValidVRID(poolService netv1alpha1.PoolServ
 		return false
 	}
 
-	if _, ok := poolService.Labels[VipLoadBalancerVRIDLabel]; !ok {
+	if _, ok := poolService.Annotations[AnnotationVipLoadBalancerVRID]; !ok {
 		return false
 	}
 
 	return true
 }
 
-func (r *ReconcileVipLoadBalancer) handleVRID(_ context.Context, poolService *netv1alpha1.PoolService) error {
+func (r *ReconcileVipLoadBalancer) handleVRID(poolService *netv1alpha1.PoolService) error {
 	if r.hasValidVRID(*poolService) {
 		return nil
 	}
 
-	// TODO: sync VRID from the nodepool
+	// Assign a new VRID to the PoolService
+	if err := r.assignVRID(poolService); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (r *ReconcileVipLoadBalancer) assignVRID(poolService *netv1alpha1.PoolService) error {
 	// Get the poolName from the PoolService
 	poolName := poolService.Labels[network.LabelNodePoolName]
 	// Get a new VRID
@@ -271,7 +270,7 @@ func (r *ReconcileVipLoadBalancer) handleVRID(_ context.Context, poolService *ne
 	}
 
 	// Set the VRID to the PoolService
-	poolService.Labels[VipLoadBalancerVRIDLabel] = strconv.Itoa(vrid)
+	poolService.Annotations[AnnotationVipLoadBalancerVRID] = strconv.Itoa(vrid)
 	return nil
 }
 
@@ -279,12 +278,7 @@ func (r *ReconcileVipLoadBalancer) reconcileDelete(ctx context.Context, poolServ
 	klog.V(4).Infof(Format("ReconcilDelete VipLoadBalancer %s/%s", poolService.Namespace, poolService.Name))
 	poolName := poolService.Labels[network.LabelNodePoolName]
 
-	// if not poolservice in the nodepool, delete the loadbalancer agent
-	if err := r.deleteVipAgent(ctx, poolService); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	vrid, err := strconv.Atoi(poolService.Labels[VipLoadBalancerVRIDLabel])
+	vrid, err := strconv.Atoi(poolService.Annotations[AnnotationVipLoadBalancerVRID])
 	if err != nil || !r.VRIDManager.isValid(poolName, vrid) {
 		return reconcile.Result{}, fmt.Errorf("invalid VRID %d", vrid)
 	}
@@ -297,30 +291,4 @@ func (r *ReconcileVipLoadBalancer) reconcileDelete(ctx context.Context, poolServ
 	}
 
 	return reconcile.Result{}, nil
-}
-
-func (r *ReconcileVipLoadBalancer) deleteVipAgent(ctx context.Context, poolService *netv1alpha1.PoolService) error {
-	// whether has vip in the nodepool
-	poolName := poolService.Labels[network.LabelNodePoolName]
-	// if not have, delete the loadbalancer agent in specific nodepool
-	yas := &appsv1alpha1.YurtAppSet{}
-	err := r.Get(
-		ctx,
-		types.NamespacedName{
-			Namespace: poolService.Namespace,
-			Name:      vipAgentName(poolName)},
-		yas)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	if err := r.Delete(ctx, yas); err != nil {
-		klog.Errorf(Format("Failed to delete YurtAppSet %s/%s: %v", yas.Namespace, yas.Name, err))
-		return err
-	}
-
-	return nil
 }

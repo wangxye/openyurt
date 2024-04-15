@@ -14,22 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package viploadbalancer
+package controllers
 
 import (
-	"github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	network "github.com/openyurtio/openyurt/pkg/apis/network"
+	"github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
+	netv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
 )
 
-func NewPoolServicePredicated() predicate.Predicate {
+func NewPoolServicePredicated(poolName string) predicate.Funcs {
 	return predicate.Funcs{
 		CreateFunc: func(createEvent event.CreateEvent) bool {
 			ps, ok := createEvent.Object.(*v1alpha1.PoolService)
 			if !ok {
 				return false
 			}
-			return predicatedPoolService(ps)
+			return predicatedPoolService(ps, poolName)
 		},
 		UpdateFunc: func(updateEvent event.UpdateEvent) bool {
 			oldPs, ok := updateEvent.ObjectOld.(*v1alpha1.PoolService)
@@ -41,42 +44,47 @@ func NewPoolServicePredicated() predicate.Predicate {
 			if !ok {
 				return false
 			}
-			return predicatedPoolService(oldPs) ||
-				predicatedPoolService(newPS)
+			return predicatedPoolService(oldPs, poolName) ||
+				predicatedPoolService(newPS, poolName)
 		},
 		DeleteFunc: func(deleteEvent event.DeleteEvent) bool {
 			ps, ok := deleteEvent.Object.(*v1alpha1.PoolService)
 			if !ok {
 				return false
 			}
-			return predicatedPoolService(ps)
+			return predicatedPoolService(ps, poolName)
 		},
 		GenericFunc: func(genericEvent event.GenericEvent) bool {
 			ps, ok := genericEvent.Object.(*v1alpha1.PoolService)
 			if !ok {
 				return false
 			}
-			return predicatedPoolService(ps)
+			return predicatedPoolService(ps, poolName)
 		},
 	}
 }
 
-func predicatedPoolService(ps *v1alpha1.PoolService) bool {
-	if ps.Labels == nil {
-		return false
-	}
-
-	return matchLoadBalancerClass(ps)
+func predicatedPoolService(ps *v1alpha1.PoolService, poolName string) bool {
+	return matchLoadBalancerClass(ps, LOADBALANCERCLASS) && matchNodePool(ps, poolName)
 }
 
-func matchLoadBalancerClass(ps *v1alpha1.PoolService) bool {
-	if ps.Spec.LoadBalancerClass == nil {
+func matchLoadBalancerClass(poolservice *netv1alpha1.PoolService, loadBalancerClass string) bool {
+	if poolservice.Spec.LoadBalancerClass == nil {
+		return false
+	}
+	if *poolservice.Spec.LoadBalancerClass != loadBalancerClass {
+		return false
+	}
+	return true
+}
+
+func matchNodePool(poolservice *netv1alpha1.PoolService, nodepool string) bool {
+	if poolservice.Labels == nil {
 		return false
 	}
 
-	if *ps.Spec.LoadBalancerClass != VipLoadBalancerClass {
+	if poolservice.Labels[network.LabelNodePoolName] != nodepool {
 		return false
 	}
-
 	return true
 }

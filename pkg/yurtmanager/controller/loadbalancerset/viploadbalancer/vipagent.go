@@ -30,8 +30,8 @@ import (
 	netv1alpha1 "github.com/openyurtio/openyurt/pkg/apis/network/v1alpha1"
 )
 
-// newYurtIoTDockComponent initialize the configuration of yurt-iot-dock component
-func newVipAgent(poolService netv1alpha1.PoolService) (*appsv1.DeploymentSpec, error) {
+// newVipAgentDaemon initialize the configuration of yurt-lb-agent
+func newVipAgentDaemon(poolService netv1alpha1.PoolService) (*appsv1.DaemonSetSpec, error) {
 
 	// Otherwise, the default configuration is used to start
 	ver, ns, err := DefaultVersion(poolService)
@@ -39,7 +39,7 @@ func newVipAgent(poolService netv1alpha1.PoolService) (*appsv1.DeploymentSpec, e
 		return nil, err
 	}
 	poolName := poolService.Labels[network.LabelNodePoolName]
-	vipAgent := &appsv1.DeploymentSpec{
+	vipAgent := &appsv1.DaemonSetSpec{
 		Selector: &metav1.LabelSelector{
 			MatchLabels: map[string]string{
 				"app":           vipAgentName(poolName),
@@ -64,7 +64,10 @@ func newVipAgent(poolService netv1alpha1.PoolService) (*appsv1.DeploymentSpec, e
 							"--health-probe-bind-address=:8081",
 							"--metrics-bind-address=127.0.0.1:8080",
 							"--leader-elect=false",
+							"--iface=eth0",
+							"--node=$(NODE_NAME)",
 							fmt.Sprintf("--namespace=%s", ns),
+							fmt.Sprintf("--nodepool=%s", poolName),
 						},
 						LivenessProbe: &corev1.Probe{
 							InitialDelaySeconds: 15,
@@ -99,12 +102,23 @@ func newVipAgent(poolService netv1alpha1.PoolService) (*appsv1.DeploymentSpec, e
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: pointer.Bool(false),
 						},
+						Env: []corev1.EnvVar{
+							{
+								Name: "NODE_NAME",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{
+										FieldPath: "spec.nodeName",
+									},
+								},
+							},
+						},
 					},
 				},
 				TerminationGracePeriodSeconds: pointer.Int64(10),
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsUser: pointer.Int64(65532),
 				},
+				HostNetwork: true,
 			},
 		},
 	}

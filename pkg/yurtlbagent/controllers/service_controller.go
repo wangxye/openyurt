@@ -41,7 +41,7 @@ import (
 const (
 	VRIDLabelKey      = "service.openyurt.io/vrid"
 	BACKUPState       = "BACKUP"
-	LOADBALANCERCLASS = "service.openyurt.io/yurtlb"
+	LOADBALANCERCLASS = "service.openyurt.io/viplb"
 )
 
 var controllerResource = netv1alpha1.SchemeGroupVersion.WithResource("poolservices")
@@ -64,8 +64,8 @@ type PoolServiceReconciler struct {
 	Services          map[string][]net.IP
 }
 
-// +kubebuilder:rbac:groups=net.openyurt.io,resources=poolservices,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=net.openyurt.io,resources=poolservices/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=network.openyurt.io,resources=poolservices,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=network.openyurt.io,resources=poolservices/status,verbs=get;update;patch
 // TODO: poolendpoints
 
 func (r *PoolServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -81,20 +81,6 @@ func (r *PoolServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 	klog.Infof(Format("get PoolService  %s/%s", req.Namespace, req.Name))
-
-	// filter loadbalancerclass
-	if filterByLoadBalancerClass(poolservice, r.LoadBalancerClass) {
-		klog.Infof(Format("filter PoolService %s/%s by LoadBalancerClass %s", req.Namespace, req.Name, r.LoadBalancerClass))
-		return ctrl.Result{}, nil
-	}
-	klog.Infof(Format("not filter PoolService  %s/%s by LoadBalancerClass %s", req.Namespace, req.Name, r.LoadBalancerClass))
-
-	// filter nodepool
-	if filterByNodepool(poolservice, r.Nodepool) {
-		klog.Infof(Format("filter PoolService %s/%s by Nodepool %s", req.Namespace, req.Name, r.Nodepool))
-		return ctrl.Result{}, nil
-	}
-	klog.Infof(Format("not filter PoolService  %s/%s by Nodepool %s", req.Namespace, req.Name, r.Nodepool))
 
 	if poolservice.DeletionTimestamp != nil {
 		return r.reconcileDelete(ctx, poolservice)
@@ -204,6 +190,7 @@ func (r *PoolServiceReconciler) SetupWithManager(mgr ctrl.Manager, opts *options
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1alpha1.PoolService{}).
+		WithEventFilter(NewPoolServicePredicated(r.Nodepool)).
 		Complete(r)
 }
 
@@ -227,27 +214,6 @@ func (r *PoolServiceReconciler) deleteBalancer(poolservice *netv1alpha1.PoolServ
 	klog.Infof(Format("poolservice %s/%s successfully deleted", poolservice.Namespace, poolservice.Name))
 
 	return ctrl.Result{}, nil
-}
-
-func filterByLoadBalancerClass(poolservice *netv1alpha1.PoolService, loadBalancerClass string) bool {
-	if poolservice == nil {
-		return false
-	}
-	if *poolservice.Spec.LoadBalancerClass != loadBalancerClass {
-		return true
-	}
-	return false
-}
-
-func filterByNodepool(poolservice *netv1alpha1.PoolService, nodepool string) bool {
-	if poolservice == nil {
-		return false
-	}
-
-	if poolservice.Labels[network.LabelNodePoolName] != nodepool {
-		return true
-	}
-	return false
 }
 
 func (r *PoolServiceReconciler) filterByPod(ctx context.Context, poolservice *netv1alpha1.PoolService) (bool, error) {
