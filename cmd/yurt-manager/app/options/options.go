@@ -41,6 +41,7 @@ type YurtManagerOptions struct {
 	NodeBucketController       *NodeBucketControllerOptions
 	EndPointsController        *EndPointsControllerOptions
 	LoadBalancerSetController  *LoadBalancerSetControllerOptions
+	VipLoadBalancerController  *VipLoadBalancerControllerOptions
 }
 
 // NewYurtManagerOptions creates a new YurtManagerOptions with a default config.
@@ -63,6 +64,7 @@ func NewYurtManagerOptions() (*YurtManagerOptions, error) {
 		NodeBucketController:       NewNodeBucketControllerOptions(),
 		EndPointsController:        NewEndPointsControllerOptions(),
 		LoadBalancerSetController:  NewLoadBalancerSetControllerOptions(),
+		VipLoadBalancerController:  NewVipLoadBalancerControllerOptions(),
 	}
 
 	return &s, nil
@@ -85,6 +87,7 @@ func (y *YurtManagerOptions) Flags(allControllers, disabledByDefaultControllers 
 	y.NodeBucketController.AddFlags(fss.FlagSet("nodebucket controller"))
 	y.EndPointsController.AddFlags(fss.FlagSet("endpoints controller"))
 	y.LoadBalancerSetController.AddFlags(fss.FlagSet("loadbalancerset controller"))
+	y.VipLoadBalancerController.AddFlags(fss.FlagSet("viploadbalancer controller"))
 	return fss
 }
 
@@ -106,6 +109,7 @@ func (y *YurtManagerOptions) Validate(allControllers []string, controllerAliases
 	errs = append(errs, y.NodeBucketController.Validate()...)
 	errs = append(errs, y.EndPointsController.Validate()...)
 	errs = append(errs, y.LoadBalancerSetController.Validate()...)
+	errs = append(errs, y.VipLoadBalancerController.Validate()...)
 	return utilerrors.NewAggregate(errs)
 }
 
@@ -154,6 +158,9 @@ func (y *YurtManagerOptions) ApplyTo(c *config.Config, controllerAliases map[str
 		return err
 	}
 	if err := y.LoadBalancerSetController.ApplyTo(&c.ComponentConfig.LoadBalancerSetController); err != nil {
+		return err
+	}
+	if err := y.VipLoadBalancerController.ApplyTo(&c.ComponentConfig.VipLoadBalancerController); err != nil {
 		return err
 	}
 	return nil
