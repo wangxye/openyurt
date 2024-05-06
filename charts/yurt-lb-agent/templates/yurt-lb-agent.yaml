@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: yurt-lb-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yurt-lb-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "yurt-lb-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yurt-lb-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      containers:
+      - name: yur-tlb-agent
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        securityContext:
+          privileged: {{ .Values.securityContext.privileged }}
+        args:
+          - "--namespace={{ .Release.Namespace }}"
+          - "--iface={{ .Values.keepalived.iface }}"
+          - "--node=$(NODE_NAME)"
+        resources:
+          limits:
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu }}
+          requests:
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu }}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+
+      hostNetwork: true
