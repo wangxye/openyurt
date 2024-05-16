@@ -57,6 +57,10 @@ const (
 	AnnotationServiceTopologyValueNodePool = "openyurt.io/nodepool"
 	AnnotationNodePoolAddressPools         = "openyurt.io/address-pools"
 	AnnotationServiceVIPAddress            = "service.openyurt.io/vip"
+	AnnotationServiceVIPStatus             = "service.openyurt.io/service-vip-ready"
+	AnnotationServiceVIPStatusReady        = "true"
+	AnnotationServiceVIPStatusUnReady      = "false"
+
 	VipLoadBalancerFinalizer               = "viploadbalancer.openyurt.io/resources"
 	poolServiceVRIDExhaustedEventMsgFormat = "PoolService %s/%s in NodePool %s has exhausted all VRIDs"
 )
@@ -346,15 +350,16 @@ func (r *ReconcileVipLoadBalancer) assignVRID(ctx context.Context, poolService *
 	}
 
 	var vips []string
-	// if specify ip for poolservice
+	// if specify ip for poolservice annotation, use it as vip
 	if svc.Annotations != nil {
 		if vipAddress, ok := svc.Annotations[AnnotationServiceVIPAddress]; ok {
-			vips = parseIP(vipAddress)
+			vips = ParseIP(vipAddress)
 		}
 	}
 
 	ipvrid, err := r.IPManagers[poolName].Assign(vips)
 	if err != nil {
+		// if no available ipvrid, return nil, and wait for next reconcile
 		klog.Errorf(Format("Failed to get a new VRID: %v", err))
 		r.recorder.Eventf(poolService, corev1.EventTypeWarning, "VRIDExhausted", poolServiceVRIDExhaustedEventMsgFormat,
 			poolService.Namespace, poolService.Name, poolName)
@@ -381,6 +386,7 @@ func (r *ReconcileVipLoadBalancer) assignVRID(ctx context.Context, poolService *
 }
 
 func (r *ReconcileVipLoadBalancer) getReferenceService(ctx context.Context, ps *netv1alpha1.PoolService) (*corev1.Service, error) {
+	// get the reference service from poolservice
 	service := &corev1.Service{}
 	svcName := ps.Labels[network.LabelServiceName]
 	if err := r.Get(ctx, types.NamespacedName{Name: svcName, Namespace: ps.Namespace}, service); err != nil {
@@ -390,24 +396,42 @@ func (r *ReconcileVipLoadBalancer) getReferenceService(ctx context.Context, ps *
 	return service, nil
 }
 
+func canRemoveFinalizer(poolService *netv1alpha1.PoolService) bool {
+	if poolService.Annotations == nil {
+		return false
+	}
+
+	if _, ok := poolService.Annotations[AnnotationServiceVIPStatus]; !ok {
+		return false
+	}
+
+	if poolService.Annotations[AnnotationServiceVIPStatus] == AnnotationServiceVIPStatusReady {
+		return false
+	}
+
+	return true
+}
+
 func (r *ReconcileVipLoadBalancer) reconcileDelete(ctx context.Context, poolService *netv1alpha1.PoolService) (reconcile.Result, error) {
 	klog.V(4).Infof(Format("ReconcilDelete VipLoadBalancer %s/%s", poolService.Namespace, poolService.Name))
 	poolName := poolService.Labels[network.LabelNodePoolName]
 
-	// Check if the PoolService has a VRID
+	// Check if the PoolService has a valid IP-VRID
 	ipvrid, err := r.checkIPVRIDs(*poolService)
 
 	if err != nil {
 		return reconcile.Result{}, nil
 	}
 
-	// Release the VRID
+	// Release the IP-VRID
 	r.IPManagers[poolName].Release(*ipvrid)
 
-	// remove the finalizer in the PoolService
-	if err := r.removeFinalizer(ctx, poolService); err != nil {
-		klog.Errorf(Format("Failed to remove finalizer from PoolService %s/%s: %v", poolService.Namespace, poolService.Name, err))
-		return reconcile.Result{}, err
+	if canRemoveFinalizer(poolService) {
+		// remove the finalizer in the PoolService
+		if err := r.removeFinalizer(ctx, poolService); err != nil {
+			klog.Errorf(Format("Failed to remove finalizer from PoolService %s/%s: %v", poolService.Namespace, poolService.Name, err))
+			return reconcile.Result{}, err
+		}
 	}
 
 	return reconcile.Result{}, nil
